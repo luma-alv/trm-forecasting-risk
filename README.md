@@ -20,6 +20,7 @@ The source endpoint and field names are configured in `configs/base.yaml`. The d
 ## Layout
 
 - `src/trm_forecast/data`: ingestion and schema validation.
+- `src/trm_forecast/data/audit.py`: non-destructive historical quality audit.
 - `src/trm_forecast/features`: lag, return, rolling-volatility, and calendar features.
 - `src/trm_forecast/models`: baseline and optional statistical/deep-learning model adapters.
 - `src/trm_forecast/evaluation`: time-series backtesting and error metrics.
@@ -36,3 +37,38 @@ The source is the [TRM dataset `ceyp-9c7c` on Datos Abiertos Colombia](https://w
 Validation is strict: invalid dates, missing/non-numeric/non-finite/non-positive TRM values, and duplicate observation dates raise errors. No observations are imputed, removed, or silently deduplicated. Weekends and Colombian holidays are not required; actual source dates are retained.
 
 Known limitation: network access to the external API was unavailable in this execution environment, so live downloading could not be exercised here. Tests use injected HTTP responses and never depend on the API.
+
+## Historical audit and exploratory analysis
+
+Run the quality audit against the normalized local file:
+
+```bash
+python -c "import pandas as pd; from trm_forecast.data.audit import audit_trm; print(audit_trm(pd.read_csv('data/interim/trm_normalized.csv')).to_dict())"
+```
+
+The audit is non-destructive. It reports valid observation counts, date coverage,
+duplicates, invalid dates and values, chronological ordering, and calendar and
+generic Monday-Friday intervals. A candidate gap is not proof of a missing TRM:
+weekends, Colombian public holidays, publication conventions, and source outages
+are not inferred. No values are filled, interpolated, deduplicated, or removed.
+
+Execute the notebooks from the repository root with Jupyter installed:
+
+```bash
+jupyter nbconvert --to notebook --execute notebooks/01_data_audit.ipynb --output /tmp/trm_data_audit.ipynb
+jupyter nbconvert --to notebook --execute notebooks/02_exploratory_analysis.ipynb --output /tmp/trm_exploratory_analysis.ipynb
+```
+
+The current local file is `data/interim/trm_normalized.csv`. It contains 5
+observations from 2024-01-03 through 2024-01-10, with columns `date`, `trm`,
+`source`, and `retrieved_at`. The dates include Saturday 2024-01-06. This is a
+very short sample and is insufficient for stable distributional conclusions or
+model-period decisions. The Saturday observation and the multi-day intervals
+must be checked against source publication rules before treating them as
+anomalies. The audit therefore leaves those decisions open.
+
+Run all tests with:
+
+```bash
+pytest
+```
