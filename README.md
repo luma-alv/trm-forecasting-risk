@@ -46,6 +46,50 @@ denominator has been selected yet. A lower error than persistence is necessary
 for a more complex model to be interesting, but it is not sufficient evidence
 of business value.
 
+## Business-value evaluation
+
+`src/trm_forecast/business/evaluation.py` evaluates timing decisions from the
+same origin/horizon forecast table. For each origin and model, the importer
+selects the horizon with the lowest predicted TRM and the exporter selects the
+horizon with the highest predicted TRM. Horizon 1 is the execution baseline.
+Selection uses predictions only; actual TRM values are read only after the
+horizon has been selected.
+
+The evaluator requires an explicit positive `usd_amount`, for example:
+
+```python
+from trm_forecast.business.evaluation import evaluate_business_value
+
+decisions, summary = evaluate_business_value(
+    predictions, usd_amount=100_000, horizons=tuple(range(1, 11))
+)
+```
+
+For an importer, gross COP benefit is `USD × (actual_TRM_h1 -
+actual_TRM_selected)`. For an exporter it is `USD × (actual_TRM_selected -
+actual_TRM_h1)`. Positive values improve on executing at horizon 1; negative
+values are worse outcomes. Decision rows include the origin, model, operation,
+selected horizon, predicted and realized TRM at selection, realized TRM at
+horizon 1, and gross COP benefit. Aggregates report mean and median benefit,
+percentage of positive benefits, valid decision count, and mean selected
+horizon by partition, model, and operation.
+
+Strict mode raises for duplicate origin/model/horizon forecasts, missing
+horizons, or non-finite predictions/actuals. With `strict=False`, invalid
+groups are excluded and `validate_forecast_grid` reports the issue type; no
+forecast or realization is fabricated. Ties select the lowest horizon after
+sorting, making horizon 1 the decision for a flat forecast.
+
+Model or decision-rule choices must be made on validation data. The test
+partition is reserved for the final frozen comparison. The included
+`notebooks/08_business_value_evaluation.ipynb` compares persistence with the
+validation-selected ARIMA order on equivalent level-forecast origins and
+horizons. GARCH and regime-switching outputs forecast volatility rather than
+TRM levels, so they are not treated as timing models in this comparison.
+Business value is gross only: it excludes spreads, fees, hedging costs, taxes,
+liquidity, execution uncertainty, and the possibility that a future forecast
+is unavailable or cannot be executed.
+
 ## ARIMA experiment
 
 `src/trm_forecast/models/arima.py` provides a configurable statsmodels ARIMA
@@ -148,7 +192,7 @@ episodes remain limitations.
 - `src/trm_forecast/features`: lag, return, rolling-volatility, and calendar features.
 - `src/trm_forecast/models`: baseline and optional statistical/deep-learning model adapters.
 - `src/trm_forecast/evaluation`: time-series backtesting and error metrics.
-- `src/trm_forecast/business`: exposure and scenario calculations.
+- `src/trm_forecast/business`: exposure, scenario, and timing-value calculations.
 - `src/trm_forecast/pipeline`: an end-to-end daily forecast runner.
 - `app`: small FastAPI and Streamlit entry points.
 
