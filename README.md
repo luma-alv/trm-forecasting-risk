@@ -9,13 +9,137 @@ pip install -e '.[dev]'
 pytest
 ```
 
-The first implemented module downloads the `ceyp-9c7c` TRM dataset without requiring API credentials:
+The ingestion module downloads the `ceyp-9c7c` TRM dataset without requiring
+API credentials. The reproducible full-history command appears below.
+
+The source endpoint and field names are configured in `configs/base.yaml`. The downloader stores the combined raw records and request metadata in `RawDownload`; normalization is a separate operation and produces `date`, `trm`, `source`, and `retrieved_at`. Socrata requests use the configured date filters, `$limit`, `$offset`, and deterministic `$order`. Pages are combined until a short or empty page is returned, with a configurable `max_pages` guard.
+
+## Temporal evaluation and persistence baseline
+
+The first forecasting experiment uses the reusable temporal protocol in
+`src/trm_forecast/evaluation/protocol.py` and the last-observation persistence
+baseline in `src/trm_forecast/evaluation/persistence.py`. Horizons count
+subsequent TRM observations, not calendar days. The initial configurable split
+is:
+
+- Training: 2008-01-01 through 2022-12-31.
+- Validation: 2023-01-01 through 2024-12-31.
+- Test: 2025-01-01 through the latest eligible observation.
+- As-of cutoff: 2026-10-19.
+
+The cutoff excludes the source record dated 2026-10-20. It does not use
+`retrieved_at` as a historical publication vintage, because original source
+vintages are unavailable. These boundaries are a reproducible initial proposal,
+not an assertion that the split is optimal. Change them in the `evaluation`
+section of `configs/base.yaml`.
+
+Run the persistence experiment with:
 
 ```bash
-python -c "from trm_forecast.data.ingestion import download_trm, normalize_download; raw = download_trm(start_date='2024-01-01', end_date='2024-01-31'); normalize_download(raw).to_csv('data/interim/trm_normalized.csv', index=False)"
+./.venv/bin/python -m jupyter nbconvert --to notebook --execute notebooks/04_persistence_baseline.ipynb --output /tmp/trm_persistence_baseline.ipynb
 ```
 
-The source endpoint and field names are configured in `configs/base.yaml`. The downloader stores raw records and request metadata; normalization is a separate operation and produces `date`, `trm`, `source`, and `retrieved_at`.
+The experiment reports partition counts and date ranges, predictions for each
+eligible origin and horizon, and MAE/RMSE grouped by partition and horizon. It
+does not include MASE because no separate, correctly defined training-scale
+denominator has been selected yet. A lower error than persistence is necessary
+for a more complex model to be interesting, but it is not sufficient evidence
+of business value.
+
+## ARIMA experiment
+
+`src/trm_forecast/models/arima.py` provides a configurable statsmodels ARIMA
+wrapper and train-only ADF/KPSS diagnostics. `src/trm_forecast/evaluation/arima.py`
+refits model parameters on the configured schedule using observations available
+up to each origin, and updates the fitted state from current-origin history
+between refits. Failed fits remain in the prediction output and are counted
+explicitly. Candidate orders are selected by validation MAE only; the selected
+order is then frozen for the test comparison against persistence on the shared
+origin/target grid.
+
+Install the optional statistical-model dependency and execute the experiment:
+
+```bash
+pip install -e '.[dev,models]'
+./.venv/bin/python -m jupyter nbconvert --to notebook --execute notebooks/05_arima_forecast.ipynb --output /tmp/trm_arima_forecast.ipynb
+```
+
+The candidate orders, minimum history, optimizer limit, and refit policy are
+configured under `arima` in `configs/base.yaml`. Stationarity tests are
+diagnostics, not proof of a model choice; visual fit and historical superiority
+over persistence do not establish performance for future 1–10 business-day
+operations.
+
+## GARCH volatility experiment
+
+`src/trm_forecast/models/garch.py` and `src/trm_forecast/evaluation/garch.py`
+implement a leakage-aware GARCH(1,1) conditional-volatility experiment. The
+target is 100 times the log return, not the TRM level. The model uses a
+constant conditional mean and GARCH(1,1) variance, refitting every 10 origins
+and updating its state with current-origin returns between refits. The existing
+optional `models` extra supplies the `arch` dependency:
+
+```bash
+pip install -e '.[dev,models]'
+./.venv/bin/python -m jupyter nbconvert --to notebook --execute notebooks/06_garch_volatility.ipynb --output /tmp/trm_garch_volatility.ipynb
+```
+
+At horizon `h`, the realized volatility proxy is the squared cumulative scaled
+log return from the origin to the h-th subsequent observation. It is a noisy
+proxy for latent integrated variance, not the true conditional variance.
+Forecast variance is the sum of the h recursive one-step conditional
+variances and is scored with QLIKE; these scores must not be compared with
+level MAE/RMSE. The optional 95% TRM-level intervals are a plug-in normal
+approximation based on that summed variance, not an exact finite-horizon GARCH
+predictive distribution. Coverage uncertainty uses a moving-block bootstrap
+with block length 10 to reflect overlapping forecast windows.
+
+On the local full-history data, training returns showed strong ARCH evidence
+(Engle LM p-value `4.18e-113`; squared-return Ljung–Box p-values below
+`4e-223`). All 4,665 validation and 4,175 test forecasts succeeded. Mean
+validation QLIKE across horizons was `2.386`, with mean coverage `0.920` and
+mean interval width `323.1` COP/USD. Mean test QLIKE was `2.095`, coverage
+`0.932`, and mean interval width `260.0` COP/USD. The untuned expanding
+historical-variance benchmark had mean QLIKE `2.346` on validation and `2.092`
+on test, so GARCH did not improve this volatility loss overall. These are
+volatility and interval results; they do not demonstrate improved TRM level
+forecasting.
+The return proxy is not a directly observed latent volatility measure, and the
+normality/uncorrelated-innovation assumptions may be inadequate during market
+stress.
+
+## Markov regime-switching experiment
+
+`src/trm_forecast/models/regime_switching.py` and
+`src/trm_forecast/evaluation/regime_switching.py` implement one parsimonious
+two-state Markov-switching model for the same scaled log returns. It has a
+common constant conditional mean, regime-specific variances, and a constant
+two-state transition matrix. At each origin, the model is fitted using only
+returns available through that origin. Between refits, the estimated
+parameters are held fixed and the filtered state probabilities are recomputed
+from the newly observed returns. Smoothed probabilities are never used for
+forecasting.
+
+Run the experiment with:
+
+```bash
+./.venv/bin/python -m jupyter nbconvert --to notebook --execute notebooks/07_regime_switching.ipynb --output /tmp/trm_regime_switching.ipynb
+```
+
+The model produced 4,665 successful validation forecasts and 4,175 successful
+test forecasts. Mean QLIKE was `2.386` on validation and `2.085` on test,
+compared with the expanding historical-variance benchmark's `2.346` and
+`2.092`, respectively. GARCH scored `2.386` and `2.095` on the same
+validation/test evaluations. The regime model therefore did not improve
+validation QLIKE, although it was slightly better on this test period. That
+test-period difference is not sufficient evidence of general superiority.
+
+The regime-switching model is a volatility experiment, not a TRM-level
+forecasting replacement. Its finite-horizon variance uses filtered regime
+probabilities propagated through the transition matrix. The resulting return
+distribution is a regime mixture, so no normal level interval is reported.
+State-label identification, local likelihood maxima, and short regime
+episodes remain limitations.
 
 ## Layout
 
@@ -36,14 +160,26 @@ The source is the [TRM dataset `ceyp-9c7c` on Datos Abiertos Colombia](https://w
 
 Validation is strict: invalid dates, missing/non-numeric/non-finite/non-positive TRM values, and duplicate observation dates raise errors. No observations are imputed, removed, or silently deduplicated. Weekends and Colombian holidays are not required; actual source dates are retained.
 
-Known limitation: network access to the external API was unavailable in this execution environment, so live downloading could not be exercised here. Tests use injected HTTP responses and never depend on the API.
+Tests use injected HTTP responses and never depend on the API. The raw and
+interim datasets generated by live retrieval are ignored by Git and remain
+local execution artifacts.
+
+To retrieve an explicit exploratory range and save the normalized result:
+
+```bash
+./.venv/bin/python -c "import json; from pathlib import Path; from trm_forecast.data.ingestion import download_trm, normalize_download; raw = download_trm(start_date='2008-01-01', end_date=None); Path('data/raw/trm_full_records.json').write_text(json.dumps(raw.records, ensure_ascii=False, indent=2)); normalized = normalize_download(raw); normalized.to_csv('data/interim/trm_normalized.csv', index=False); print('raw records:', len(raw.records)); print('normalized records:', len(normalized)); print('latest:', normalized['date'].max().date())"
+```
+
+The start date is explicit while `end_date=None` lets the source determine its
+latest available observation. This is not a final training, validation, or
+test-period decision.
 
 ## Historical audit and exploratory analysis
 
 Run the quality audit against the normalized local file:
 
 ```bash
-python -c "import pandas as pd; from trm_forecast.data.audit import audit_trm; print(audit_trm(pd.read_csv('data/interim/trm_normalized.csv')).to_dict())"
+./.venv/bin/python -c "import pandas as pd; from trm_forecast.data.audit import audit_trm; print(audit_trm(pd.read_csv('data/interim/trm_normalized.csv')).to_dict())"
 ```
 
 The audit is non-destructive. It reports valid observation counts, date coverage,
@@ -55,20 +191,20 @@ are not inferred. No values are filled, interpolated, deduplicated, or removed.
 Execute the notebooks from the repository root with Jupyter installed:
 
 ```bash
-jupyter nbconvert --to notebook --execute notebooks/01_data_audit.ipynb --output /tmp/trm_data_audit.ipynb
-jupyter nbconvert --to notebook --execute notebooks/02_exploratory_analysis.ipynb --output /tmp/trm_exploratory_analysis.ipynb
+./.venv/bin/python -m jupyter nbconvert --to notebook --execute notebooks/01_data_audit.ipynb --output /tmp/trm_data_audit.ipynb
+./.venv/bin/python -m jupyter nbconvert --to notebook --execute notebooks/02_exploratory_analysis.ipynb --output /tmp/trm_exploratory_analysis.ipynb
 ```
 
-The current local file is `data/interim/trm_normalized.csv`. It contains 5
-observations from 2024-01-03 through 2024-01-10, with columns `date`, `trm`,
-`source`, and `retrieved_at`. The dates include Saturday 2024-01-06. This is a
-very short sample and is insufficient for stable distributional conclusions or
-model-period decisions. The Saturday observation and the multi-day intervals
-must be checked against source publication rules before treating them as
-anomalies. The audit therefore leaves those decisions open.
+The regenerated local file is `data/interim/trm_normalized.csv`. The latest
+full-history run contains 4,456 observations from 2008-01-03 through
+2026-10-20, with columns `date`, `trm`, `source`, and `retrieved_at`. The raw
+response is preserved locally as `data/raw/trm_full_records.json`; both data
+files are ignored by Git. The source includes dates such as Saturdays because
+TRM validity dates are source observations, not an assumed Monday-Friday
+schedule. This exploratory coverage is not a final model-period decision.
 
 Run all tests with:
 
 ```bash
-pytest
+./.venv/bin/python -m pytest
 ```
