@@ -6,11 +6,12 @@ canonical four-column table.
 """
 from __future__ import annotations
 
+import json
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-import json
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -35,6 +36,10 @@ class EmptyResponseError(IngestionError):
     """Raised when a successful response contains no records."""
 
 
+class PaginationError(IngestionError):
+    """Raised when pagination cannot terminate safely."""
+
+
 @dataclass(frozen=True)
 class TRMSourceConfig:
     """Configurable Socrata source and request behavior."""
@@ -45,6 +50,7 @@ class TRMSourceConfig:
     date_field: str = "vigenciadesde"
     value_field: str = "valor"
     page_size: int = 50000
+    max_pages: int = 1000
     extra_params: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -72,7 +78,13 @@ def _iso_date(value: date | datetime | str | None) -> str | None:
     return parsed.date().isoformat()
 
 
-def _build_params(config: TRMSourceConfig, start_date=None, end_date=None) -> dict[str, str]:
+def _build_params(config: TRMSourceConfig, start_date=None, end_date=None, offset: int = 0) -> dict[str, str]:
+    if config.page_size <= 0:
+        raise ValueError("page_size must be positive")
+    if config.max_pages <= 0:
+        raise ValueError("max_pages must be positive")
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
     params = dict(config.extra_params)
     params.setdefault("$select", f"{config.date_field},{config.value_field}")
     start, end = _iso_date(start_date), _iso_date(end_date)
@@ -86,7 +98,8 @@ def _build_params(config: TRMSourceConfig, start_date=None, end_date=None) -> di
     if conditions:
         params["$where"] = " AND ".join(conditions)
     params.setdefault("$order", config.date_field)
-    params.setdefault("$limit", str(config.page_size))
+    params["$limit"] = str(config.page_size)
+    params["$offset"] = str(offset)
     return params
 
 
@@ -94,6 +107,16 @@ def _default_http_get(url: str, timeout: float) -> bytes:
     request = Request(url, headers={"Accept": "application/json", "User-Agent": "trm-forecasting-risk/0.1"})
     with urlopen(request, timeout=timeout) as response:  # nosec B310: endpoint is configurable by design
         return response.read()
+
+
+def _decode_records(payload: bytes | str) -> list[dict[str, Any]]:
+    try:
+        decoded = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+        raise IngestionError("TRM source returned invalid JSON") from exc
+    if not isinstance(decoded, list) or not all(isinstance(record, dict) for record in decoded):
+        raise IngestionError("TRM source returned a JSON structure other than records")
+    return decoded
 
 
 def download_trm(
@@ -109,25 +132,41 @@ def download_trm(
     timeout, malformed JSON, and empty-response errors are surfaced explicitly.
     """
     config = config or TRMSourceConfig()
-    params = _build_params(config, start_date, end_date)
-    url = f"{config.endpoint}?{urlencode(params)}"
     getter = http_get or _default_http_get
+    all_records: list[dict[str, Any]] = []
+    page_requests: list[Mapping[str, str]] = []
     retrieved_at = datetime.now(timezone.utc)
-    try:
-        payload = getter(url, config.timeout_seconds)
-    except HTTPError as exc:
-        raise IngestionHTTPError(f"TRM source returned HTTP {exc.code}") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise IngestionError(f"TRM source request failed: {exc}") from exc
-    try:
-        decoded = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
-        raise IngestionError("TRM source returned invalid JSON") from exc
-    if not isinstance(decoded, list) or not decoded:
-        raise EmptyResponseError("TRM source returned no records")
-    if not all(isinstance(record, dict) for record in decoded):
-        raise IngestionError("TRM source returned a JSON structure other than records")
-    return RawDownload(decoded, retrieved_at, config.endpoint, params, config.source_name)
+    for page_number in range(config.max_pages):
+        offset = page_number * config.page_size
+        params = _build_params(config, start_date, end_date, offset=offset)
+        url = f"{config.endpoint}?{urlencode(params)}"
+        page_requests.append(params)
+        try:
+            payload = getter(url, config.timeout_seconds)
+        except HTTPError as exc:
+            raise IngestionHTTPError(f"TRM source returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise IngestionError(f"TRM source request failed: {exc}") from exc
+        page_records = _decode_records(payload)
+        if not page_records:
+            if not all_records:
+                raise EmptyResponseError("TRM source returned no records")
+            break
+        all_records.extend(page_records)
+        if len(page_records) < config.page_size:
+            break
+    else:
+        raise PaginationError(
+            f"TRM source did not terminate after {config.max_pages} pages; "
+            "increase max_pages only after checking the source query"
+        )
+    return RawDownload(
+        all_records,
+        retrieved_at,
+        config.endpoint,
+        page_requests[-1],
+        config.source_name,
+    )
 
 
 def normalize_download(download: RawDownload, config: TRMSourceConfig | None = None) -> pd.DataFrame:
