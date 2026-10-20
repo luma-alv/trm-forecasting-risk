@@ -7,10 +7,15 @@ Forecast Colombia's Representative Market Exchange Rate (TRM, USD/COP) over a 1‚
 ```bash
 pip install -e '.[dev]'
 pytest
-python -m trm_forecast.pipeline.daily_run --input data/raw/trm.csv --output data/processed/forecast.csv
 ```
 
-The input CSV must contain a date column (`date`, `fecha`, or `Date`) and a TRM column (`trm`, `value`, or `valor`). Dates are normalized to business days and values are validated as positive.
+The first implemented module downloads the `ceyp-9c7c` TRM dataset without requiring API credentials:
+
+```bash
+python -c "from trm_forecast.data.ingestion import download_trm, normalize_download; raw = download_trm(start_date='2024-01-01', end_date='2024-01-31'); normalize_download(raw).to_csv('data/interim/trm_normalized.csv', index=False)"
+```
+
+The source endpoint and field names are configured in `configs/base.yaml`. The downloader stores raw records and request metadata; normalization is a separate operation and produces `date`, `trm`, `source`, and `retrieved_at`.
 
 ## Layout
 
@@ -26,4 +31,8 @@ The project is deliberately leakage-aware: features are shifted before being use
 
 ## Data source
 
-Place an official or licensed TRM export in `data/raw/`. The ingestion layer is source-agnostic so a Banco de la Rep√∫blica/Superintendencia Financiera download can be used without changing model code. Do not commit confidential exposure data.
+The source is the [TRM dataset `ceyp-9c7c` on Datos Abiertos Colombia](https://www.datos.gov.co/Econom-a-y-Finanzas/TRM/ceyp-9c7c), supplied by the Superintendencia Financiera de Colombia. Its verified API fields are `valor`, `vigenciadesde`, and `vigenciahasta`; this implementation uses `vigenciadesde` as `date` and `valor` as `trm`. Socrata SoQL date filters are sent when `start_date` and/or `end_date` are provided.
+
+Validation is strict: invalid dates, missing/non-numeric/non-finite/non-positive TRM values, and duplicate observation dates raise errors. No observations are imputed, removed, or silently deduplicated. Weekends and Colombian holidays are not required; actual source dates are retained.
+
+Known limitation: network access to the external API was unavailable in this execution environment, so live downloading could not be exercised here. Tests use injected HTTP responses and never depend on the API.
