@@ -1,0 +1,16 @@
+data:
+  date_column: date
+  value_column: trm
+  frequency: B
+features:
+  lags: [1, 2, 5, 10]
+  rolling_windows: [5, 10, 20]
+forecast:
+  horizon: 5
+  confidence_level: 0.95
+backtest:
+  initial_train_size: 60
+  step: 1
+business:
+  exposure_currency: USD
+  base_currency: COP
