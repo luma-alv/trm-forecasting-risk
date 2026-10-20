@@ -2,6 +2,14 @@ data:
   date_column: date
   value_column: trm
   frequency: B
+  source:
+    endpoint: https://www.datos.gov.co/resource/ceyp-9c7c.json
+    dataset_id: ceyp-9c7c
+    source_name: "Datos Abiertos Colombia: ceyp-9c7c"
+    date_field: vigenciadesde
+    value_field: valor
+    timeout_seconds: 30
+    page_size: 50000
 features:
   lags: [1, 2, 5, 10]
   rolling_windows: [5, 10, 20]
