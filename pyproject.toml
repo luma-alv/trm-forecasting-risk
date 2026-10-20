@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trm-forecasting-risk"
+version = "0.1.0"
+description = "Short-horizon TRM forecasting and FX exposure analysis."
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pandas>=2.0", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+models = ["statsmodels>=0.14", "arch>=6.0", "tensorflow>=2.13"]
+app = ["fastapi>=0.100", "uvicorn>=0.23", "streamlit>=1.25"]
+dev = ["pytest>=7.0", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
