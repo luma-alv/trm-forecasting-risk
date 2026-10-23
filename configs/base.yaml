@@ -13,6 +13,8 @@ data:
 features:
   lags: [1, 2, 5, 10]
   rolling_windows: [5, 10, 20]
+ridge:
+  alpha_grid: [0.1, 1.0, 10.0, 100.0]
 forecast:
   horizon: 5
   confidence_level: 0.95
@@ -34,6 +36,7 @@ evaluation:
       end: null
 arima:
   candidate_orders: [[0, 1, 0], [1, 1, 0], [0, 1, 1], [1, 1, 1]]
+  drift_trend: "t"
   min_history: 60
   maxiter: 100
   refit_frequency: 10

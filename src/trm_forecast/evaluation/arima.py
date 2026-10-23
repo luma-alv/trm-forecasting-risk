@@ -19,6 +19,7 @@ def evaluate_arima(
     min_history: int = 60,
     maxiter: int = 100,
     refit_frequency: int = 10,
+    trend: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate expanding-window ARIMA with a deterministic refit schedule.
 
@@ -47,7 +48,7 @@ def evaluate_arima(
             if len(history) < min_history:
                 status = "insufficient_history"
             else:
-                model = ARIMAForecast(order=tuple(order), maxiter=maxiter)
+                model = ARIMAForecast(order=tuple(order), maxiter=maxiter, trend=trend)
                 try:
                     model.fit(history)
                     last_model = model
@@ -81,7 +82,7 @@ def evaluate_arima(
                 {
                     **row,
                     "prediction": prediction,
-                    "model": f"arima{tuple(order)}",
+                    "model": f"arima{tuple(order)}" + ("_drift" if trend == "t" else ""),
                     "status": status,
                     "fit_error": error_message,
                     "error": row["actual"] - prediction if np.isfinite(prediction) else np.nan,

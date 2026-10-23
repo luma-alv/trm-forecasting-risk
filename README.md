@@ -46,6 +46,89 @@ denominator has been selected yet. A lower error than persistence is necessary
 for a more complex model to be interesting, but it is not sufficient evidence
 of business value.
 
+## Business-value evaluation
+
+`src/trm_forecast/business/evaluation.py` evaluates timing decisions from the
+same origin/horizon forecast table. For each origin and model, the importer
+selects the horizon with the lowest predicted TRM and the exporter selects the
+horizon with the highest predicted TRM. Horizon 1 is the execution baseline.
+Selection uses predictions only; actual TRM values are read only after the
+horizon has been selected.
+
+The evaluator requires an explicit positive `usd_amount`, for example:
+
+```python
+from trm_forecast.business.evaluation import evaluate_business_value
+
+decisions, summary = evaluate_business_value(
+    predictions, usd_amount=100_000, horizons=tuple(range(1, 11))
+)
+```
+
+For an importer, gross COP benefit is `USD × (actual_TRM_h1 -
+actual_TRM_selected)`. For an exporter it is `USD × (actual_TRM_selected -
+actual_TRM_h1)`. Positive values improve on executing at horizon 1; negative
+values are worse outcomes. Decision rows include the origin, model, operation,
+selected horizon, predicted and realized TRM at selection, realized TRM at
+horizon 1, and gross COP benefit. Aggregates report mean and median benefit,
+percentage of positive benefits, valid decision count, and mean selected
+horizon by partition, model, and operation.
+
+Strict mode raises for duplicate origin/model/horizon forecasts, missing
+horizons, or non-finite predictions/actuals. With `strict=False`, invalid
+groups are excluded and `validate_forecast_grid` reports the issue type; no
+forecast or realization is fabricated. Ties select the lowest horizon after
+sorting, making horizon 1 the decision for a flat forecast.
+
+Model or decision-rule choices must be made on validation data. The test
+partition is reserved for the final frozen comparison. The included
+`notebooks/08_business_value_evaluation.ipynb` compares persistence,
+ARIMA(0,1,0), ARIMA(0,1,1), and ARIMA(0,1,0) with drift on equivalent
+level-forecast origins and horizons. For integrated models, the drift variant
+uses statsmodels `trend="t"`, which represents a constant in first
+differences; a literal constant is invalid when `d=1`. The drift variant is
+reported as a predefined experiment, not selected using test results. GARCH
+and regime-switching outputs forecast volatility rather than TRM levels, so
+they are not treated as timing models in this comparison.
+Business value is gross only: it excludes spreads, fees, hedging costs, taxes,
+liquidity, execution uncertainty, and the possibility that a future forecast
+is unavailable or cannot be executed.
+
+## TRM-derived Ridge feature experiment
+
+`src/trm_forecast/evaluation/ridge.py` evaluates direct horizon-specific Ridge
+regressions using the feature builder in
+`src/trm_forecast/features/build_features.py`. The feature set contains the
+observed origin TRM level, lagged TRM levels, the log return through the
+origin, and rolling means/standard deviations computed from
+`trm.shift(1)`, plus day of week. Ridge standardization and coefficients are
+fit on training rows only. Alpha is selected on validation; the selected alpha
+is then refit on train plus validation before the frozen test evaluation.
+
+The experiment is documented in
+`notebooks/09_exogenous_features_ridge.ipynb` and its executed HTML report.
+No external macroeconomic variables are included in the primary experiment:
+the repository has no historical external dataset with publication or
+availability timestamps, so joining US rates, dollar indices, Colombian policy
+rates, or inflation by economic period would not be leakage-safe. Such data
+require vintage-aware sources before they can be added.
+
+The robustness audit is documented in
+`reports/10_ridge_economic_robustness.md`. It uses the frozen validation
+choice `alpha = 0.1` and common complete origin/horizon groups to report
+benefit percentiles, positive/zero/negative proportions, horizon-selection
+distributions, concentration of positive outcomes, quarterly stability,
+matched-origin comparisons, and USD-notional sensitivity. These summaries are
+descriptive; they do not establish economic superiority and exclude execution
+costs and other real-world frictions.
+
+The consolidated technical source of truth is in
+`reports/experiment_inventory.md` and `reports/master_results.md`, with
+machine-readable level, volatility, and business-value tables in the adjacent
+CSV files. These tables were regenerated from the current evaluation modules;
+HTML exports are not treated as authoritative when their execution history is
+uncertain.
+
 ## ARIMA experiment
 
 `src/trm_forecast/models/arima.py` provides a configurable statsmodels ARIMA
@@ -148,7 +231,7 @@ episodes remain limitations.
 - `src/trm_forecast/features`: lag, return, rolling-volatility, and calendar features.
 - `src/trm_forecast/models`: baseline and optional statistical/deep-learning model adapters.
 - `src/trm_forecast/evaluation`: time-series backtesting and error metrics.
-- `src/trm_forecast/business`: exposure and scenario calculations.
+- `src/trm_forecast/business`: exposure, scenario, and timing-value calculations.
 - `src/trm_forecast/pipeline`: an end-to-end daily forecast runner.
 - `app`: small FastAPI and Streamlit entry points.
 
