@@ -67,3 +67,34 @@ def test_arima_reproducibility_and_stationarity_diagnostics():
     forecast_one = ARIMAForecast(order=(0, 1, 0)).fit(values).predict(2)
     forecast_two = ARIMAForecast(order=(0, 1, 0)).fit(values).predict(2)
     np.testing.assert_allclose(forecast_one, forecast_two)
+
+
+def test_arima_drift_uses_linear_trend_for_integrated_model():
+    values = pd.Series(100 + np.arange(30, dtype=float))
+    model = ARIMAForecast(order=(0, 1, 0), trend="t").fit(values)
+    forecast = model.predict(3)
+
+    assert model.fitted_model.model.trend == "t"
+    assert model.fitted_model.model.param_names[0] == "x1"
+    assert np.all(np.diff(forecast) > 0)
+
+
+def test_arima_drift_evaluation_preserves_target_alignment_and_identifier():
+    result = _protocol_result()
+    predictions, metrics = evaluate_arima(
+        result,
+        order=(0, 1, 0),
+        horizons=(1, 2),
+        partitions=("validation",),
+        min_history=5,
+        trend="t",
+    )
+    persistence, _ = evaluate_persistence(result, horizons=(1, 2))
+    expected = persistence.loc[
+        persistence["partition"] == "validation", ["forecast_origin", "target_date", "horizon"]
+    ]
+    actual = predictions[["forecast_origin", "target_date", "horizon"]]
+
+    pd.testing.assert_frame_equal(actual.reset_index(drop=True), expected.reset_index(drop=True))
+    assert set(predictions["model"]) == {"arima(0, 1, 0)_drift"}
+    assert set(metrics["horizon"]) == {1, 2}

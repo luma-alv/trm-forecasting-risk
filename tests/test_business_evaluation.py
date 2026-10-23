@@ -73,3 +73,18 @@ def test_aggregation_reports_mean_median_positive_rate_count_and_horizon():
     assert (summary["mean_selected_horizon"] == 1).all()
     assert (summary["positive_benefit_pct"] == 0).all()
     assert len(decisions) == 4
+
+
+def test_predefined_arima011_can_be_compared_with_persistence_and_arima010():
+    frames = [
+        forecasts({h: 4000 for h in range(1, 11)}, model="persistence_last"),
+        forecasts({h: 4000 for h in range(1, 11)}, model="arima_010"),
+        forecasts({h: 4000 + (10 - h) for h in range(1, 11)}, model="arima_011"),
+    ]
+    decisions, summary = evaluate_business_value(pd.concat(frames), 100)
+
+    assert set(summary["model"]) == {"persistence_last", "arima_010", "arima_011"}
+    arima011 = decisions.loc[decisions["model"] == "arima_011"]
+    assert set(arima011["selected_horizon"]) == {10, 1}
+    assert arima011.loc[arima011["operation"] == "importer", "gross_cop_benefit"].iloc[0] < 0
+    assert arima011.loc[arima011["operation"] == "exporter", "gross_cop_benefit"].iloc[0] == 0

@@ -10,13 +10,19 @@ import pandas as pd
 
 @dataclass
 class ARIMAForecast:
-    """Small wrapper around statsmodels' ARIMA implementation."""
+    """Small wrapper around statsmodels' ARIMA implementation.
+
+    For an integrated model, ``trend="t"`` represents a constant drift in
+    the first differences. A literal constant is intentionally not used:
+    statsmodels rejects it when ``d > 0``.
+    """
 
     order: tuple[int, int, int] = (1, 1, 1)
     maxiter: int = 100
     fitted_model: object | None = None
     fit_status: str = "not_fitted"
     fit_warning: str | None = None
+    trend: str | None = None
 
     def fit(self, y: pd.Series | np.ndarray) -> ARIMAForecast:
         values = np.asarray(y, dtype=float)
@@ -33,7 +39,7 @@ class ARIMAForecast:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ConvergenceWarning)
             try:
-                self.fitted_model = ARIMA(values, order=self.order).fit(
+                self.fitted_model = ARIMA(values, order=self.order, trend=self.trend).fit(
                     method_kwargs={"maxiter": self.maxiter}
                 )
             except Exception:
@@ -71,9 +77,9 @@ class ARIMAForecast:
         return np.asarray(applied.forecast(steps=horizon), dtype=float)
 
 
-def forecast_arima(y, horizon: int = 5, order=(1, 1, 1)) -> np.ndarray:
+def forecast_arima(y, horizon: int = 5, order=(1, 1, 1), trend: str | None = None) -> np.ndarray:
     """Backward-compatible one-shot ARIMA forecast."""
-    return ARIMAForecast(tuple(order)).fit(y).predict(horizon)
+    return ARIMAForecast(tuple(order), trend=trend).fit(y).predict(horizon)
 
 
 def stationarity_diagnostics(series: pd.Series) -> pd.DataFrame:

@@ -82,13 +82,52 @@ sorting, making horizon 1 the decision for a flat forecast.
 
 Model or decision-rule choices must be made on validation data. The test
 partition is reserved for the final frozen comparison. The included
-`notebooks/08_business_value_evaluation.ipynb` compares persistence with the
-validation-selected ARIMA order on equivalent level-forecast origins and
-horizons. GARCH and regime-switching outputs forecast volatility rather than
-TRM levels, so they are not treated as timing models in this comparison.
+`notebooks/08_business_value_evaluation.ipynb` compares persistence,
+ARIMA(0,1,0), ARIMA(0,1,1), and ARIMA(0,1,0) with drift on equivalent
+level-forecast origins and horizons. For integrated models, the drift variant
+uses statsmodels `trend="t"`, which represents a constant in first
+differences; a literal constant is invalid when `d=1`. The drift variant is
+reported as a predefined experiment, not selected using test results. GARCH
+and regime-switching outputs forecast volatility rather than TRM levels, so
+they are not treated as timing models in this comparison.
 Business value is gross only: it excludes spreads, fees, hedging costs, taxes,
 liquidity, execution uncertainty, and the possibility that a future forecast
 is unavailable or cannot be executed.
+
+## TRM-derived Ridge feature experiment
+
+`src/trm_forecast/evaluation/ridge.py` evaluates direct horizon-specific Ridge
+regressions using the feature builder in
+`src/trm_forecast/features/build_features.py`. The feature set contains the
+observed origin TRM level, lagged TRM levels, the log return through the
+origin, and rolling means/standard deviations computed from
+`trm.shift(1)`, plus day of week. Ridge standardization and coefficients are
+fit on training rows only. Alpha is selected on validation; the selected alpha
+is then refit on train plus validation before the frozen test evaluation.
+
+The experiment is documented in
+`notebooks/09_exogenous_features_ridge.ipynb` and its executed HTML report.
+No external macroeconomic variables are included in the primary experiment:
+the repository has no historical external dataset with publication or
+availability timestamps, so joining US rates, dollar indices, Colombian policy
+rates, or inflation by economic period would not be leakage-safe. Such data
+require vintage-aware sources before they can be added.
+
+The robustness audit is documented in
+`reports/10_ridge_economic_robustness.md`. It uses the frozen validation
+choice `alpha = 0.1` and common complete origin/horizon groups to report
+benefit percentiles, positive/zero/negative proportions, horizon-selection
+distributions, concentration of positive outcomes, quarterly stability,
+matched-origin comparisons, and USD-notional sensitivity. These summaries are
+descriptive; they do not establish economic superiority and exclude execution
+costs and other real-world frictions.
+
+The consolidated technical source of truth is in
+`reports/experiment_inventory.md` and `reports/master_results.md`, with
+machine-readable level, volatility, and business-value tables in the adjacent
+CSV files. These tables were regenerated from the current evaluation modules;
+HTML exports are not treated as authoritative when their execution history is
+uncertain.
 
 ## ARIMA experiment
 
